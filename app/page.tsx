@@ -1,414 +1,462 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { supabase } from '@/utils/supabase';
+import { useEffect, useState } from "react";
+import { AdminView } from "@/app/components/admin-view";
+import { AuthView } from "@/app/components/auth-view";
+import { CitizenView } from "@/app/components/citizen-view";
+import { LandingView } from "@/app/components/landing-view";
+import { SiteHeader } from "@/app/components/ui";
+import { SAMPLE_ISSUES, asIssues, composeDescription, type Issue } from "@/lib/issues";
+import { isSupabaseConfigured, supabase } from "@/utils/supabase";
+
+type View = "home" | "login" | "user-dashboard" | "admin-dashboard";
+
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+function readFile(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read that photo."));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function Home() {
-  const [view, setView] = useState<'home' | 'login' | 'user-dashboard' | 'admin-dashboard'>('home');
+  const [view, setView] = useState<View>("home");
+  const [booting, setBooting] = useState(isSupabaseConfigured);
+  const [signedIn, setSignedIn] = useState(false);
+  const [preview, setPreview] = useState(!isSupabaseConfigured);
   const [isRegistering, setIsRegistering] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [customStatusInput, setCustomStatusInput] = useState<{ [key: string]: string }>({});
-  const [isCustomMode, setIsCustomMode] = useState<{ [key: string]: boolean }>({});
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
 
-  // User Dashboard States
+  const [category, setCategory] = useState("");
+  const [description, setDescription] = useState("");
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [status, setStatus] = useState('');
-  const [description, setDescription] = useState('');
-  
-  // Tracking & Admin Feed Data
-  const [myIssues, setMyIssues] = useState<any[]>([]);
-  const [allIssues, setAllIssues] = useState<any[]>([]);
+  const [photoInputKey, setPhotoInputKey] = useState(0);
+  const [formMessage, setFormMessage] = useState("");
+  const [formTone, setFormTone] = useState<"error" | "ok" | "info">("info");
+  const [submitting, setSubmitting] = useState(false);
+
+  const [myIssues, setMyIssues] = useState<Issue[]>(() => (isSupabaseConfigured ? [] : [...SAMPLE_ISSUES]));
+  const [allIssues, setAllIssues] = useState<Issue[]>(() => (isSupabaseConfigured ? [] : [...SAMPLE_ISSUES]));
+  const [listLoading, setListLoading] = useState(false);
+  const [deskMessage, setDeskMessage] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (view === 'user-dashboard') fetchUserIssues();
-    if (view === 'admin-dashboard') fetchAllIssues();
-  }, [view]);
+    return () => {
+      if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview);
+    };
+  }, [imagePreview]);
 
-  const fetchUserIssues = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+  useEffect(() => {
+    if (!supabase) return;
+    const client = supabase;
+    let ignore = false;
+
+    client.auth
+      .getSession()
+      .then(async ({ data }) => {
+        if (ignore) return;
+        const user = data.session?.user;
+        if (!user) {
+          setBooting(false);
+          return;
+        }
+
+        setSignedIn(true);
+        setPreview(false);
+        if (user.email) setEmail(user.email);
+        setView("user-dashboard");
+
+        const { data: rows, error } = await client
+          .from("issues")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false });
+        if (ignore) return;
+        if (error) {
+          setFormTone("error");
+          setFormMessage(error.message);
+        } else {
+          setMyIssues(asIssues(rows));
+        }
+        setBooting(false);
+      })
+      .catch(() => {
+        if (!ignore) setBooting(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  async function loadMine() {
+    if (!supabase) return;
+    setListLoading(true);
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData.user) {
+      setListLoading(false);
+      setFormTone("error");
+      setFormMessage("Sign in again to see your reports.");
+      return;
+    }
     const { data, error } = await supabase
-      .from('issues')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-    if (!error && data) setMyIssues(data);
+      .from("issues")
+      .select("*")
+      .eq("user_id", userData.user.id)
+      .order("created_at", { ascending: false });
+    if (error) {
+      setFormTone("error");
+      setFormMessage(error.message);
+    } else {
+      setMyIssues(asIssues(data));
+    }
+    setListLoading(false);
+  }
+
+  async function loadAll() {
+    if (!supabase) return;
+    setListLoading(true);
+    const { data, error } = await supabase.from("issues").select("*").order("created_at", { ascending: false });
+    if (error) setDeskMessage(error.message);
+    else {
+      setDeskMessage("");
+      setAllIssues(asIssues(data));
+    }
+    setListLoading(false);
+  }
+
+  const openReport = () => {
+    if (!supabase || !signedIn) {
+      if (!supabase) {
+        setPreview(true);
+        setView("user-dashboard");
+        return;
+      }
+      setView("login");
+      return;
+    }
+    setPreview(false);
+    setListLoading(true);
+    setView("user-dashboard");
+    void loadMine();
   };
 
-  const fetchAllIssues = async () => {
-    const { data, error } = await supabase
-      .from('issues')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && data) setAllIssues(data);
-  };
-
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email || !password) {
-      alert('Please fill in all fields');
+  const handleAuth = async () => {
+    if (!supabase) {
+      setAuthError("Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to create accounts.");
+      setAuthNotice("");
+      return;
+    }
+    if (!email.trim() || password.length < 6) {
+      setAuthError("Enter an email and a password of at least 6 characters.");
+      setAuthNotice("");
       return;
     }
 
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthNotice("");
+
     if (isRegistering) {
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) alert(error.message);
-      else {
-        alert('Account created! You can now log in.');
-        setIsRegistering(false);
+      const { error } = await supabase.auth.signUp({ email: email.trim(), password });
+      setAuthBusy(false);
+      if (error) {
+        setAuthError(error.message);
+        return;
       }
-    } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) alert(error.message);
-      else setView('user-dashboard');
+      setPassword("");
+      setIsRegistering(false);
+      setAuthNotice("Account created. Sign in with the same email.");
+      return;
     }
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setAuthBusy(false);
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+    setSignedIn(true);
+    setPreview(false);
+    if (data.user?.email) setEmail(data.user.email);
+    setPassword("");
+    setListLoading(true);
+    setView("user-dashboard");
+    void loadMine();
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setView('home');
+    if (supabase && signedIn) await supabase.auth.signOut();
+    setSignedIn(false);
+    setPreview(!supabase);
+    setPassword("");
+    setView("home");
+    setFormMessage("");
+    setCategory("");
+    setDescription("");
+    setLocation(null);
+    setImageFile(null);
+    setImagePreview(null);
   };
 
-  const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleCapture = (file: File) => {
+    if (file.type && !file.type.startsWith("image/")) {
+      setFormTone("error");
+      setFormMessage("Choose an image file.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setFormTone("error");
+      setFormMessage("That photo is over 8 MB. Choose a smaller one.");
+      return;
+    }
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
-    setStatus('Getting location...');
-
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          setStatus('Location locked. Ready to submit.');
-        },
-        () => setStatus('Failed to get location'),
-        { enableHighAccuracy: true }
-      );
-    }
+    setFormTone("info");
+    setFormMessage(location ? "Photo added." : "Photo added. Lock the location next.");
+    if (!location) locate();
   };
 
-  const handleSubmitIssue = async () => {
-    if (!imageFile || !location) {
-      alert('Please include an image and location.');
+  const locate = () => {
+    if (!navigator.geolocation) {
+      setFormTone("error");
+      setFormMessage("This browser cannot read your location. Type the coordinates instead.");
+      return;
+    }
+    setFormTone("info");
+    setFormMessage("Finding your location...");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+        setFormTone("ok");
+        setFormMessage("Location locked.");
+      },
+      () => {
+        setFormTone("error");
+        setFormMessage("Location was blocked. Allow it, or type the coordinates.");
+      },
+      { enableHighAccuracy: true, timeout: 12000 },
+    );
+  };
+
+  const clearReport = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    setPhotoInputKey((key) => key + 1);
+    setDescription("");
+    setLocation(null);
+  };
+
+  const handleSubmit = async () => {
+    if (!imageFile || !location || !category || description.trim().length < 8) {
+      setFormTone("error");
+      setFormMessage("Add a photo, a location, a category, and a short description.");
       return;
     }
 
-    setStatus('Uploading report...');
+    setSubmitting(true);
+    setFormMessage("");
+
+    if (!supabase || preview) {
+      try {
+        const imageUrl = await readFile(imageFile);
+        const local: Issue = {
+          id: crypto.randomUUID(),
+          user_id: "preview",
+          image_url: imageUrl,
+          lat: location.lat,
+          lng: location.lng,
+          description: composeDescription(category, description),
+          status: "Pending",
+          created_at: new Date().toISOString(),
+        };
+        setMyIssues((current) => [local, ...(current.length ? current : SAMPLE_ISSUES)]);
+        setAllIssues((current) => [local, ...(current.length ? current : SAMPLE_ISSUES)]);
+        clearReport();
+        setFormTone("ok");
+        setFormMessage("Saved in this browser. Connect Supabase to send it to the city desk.");
+      } catch (error) {
+        setFormTone("error");
+        setFormMessage(error instanceof Error ? error.message : "Could not read that photo.");
+      }
+      setSubmitting(false);
+      return;
+    }
+
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setView('login');
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) {
+        setView("login");
+        setFormTone("error");
+        setFormMessage("Sign in again before submitting.");
+        setSubmitting(false);
         return;
       }
 
-      const fileExt = imageFile.name.split('.').pop();
-      const fileName = `${Math.random()}.${fileExt}`;
-      const { error: uploadError } = await supabase.storage
-        .from('issue-images')
-        .upload(fileName, imageFile);
-
+      const extension = imageFile.name.split(".").pop() || "jpg";
+      const fileName = `${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await supabase.storage.from("issue-images").upload(fileName, imageFile);
       if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage
-        .from('issue-images')
-        .getPublicUrl(fileName);
-
-      const { error: dbError } = await supabase.from('issues').insert([
+      const { data: urlData } = supabase.storage.from("issue-images").getPublicUrl(fileName);
+      const { error: dbError } = await supabase.from("issues").insert([
         {
-          user_id: user.id,
+          user_id: userData.user.id,
           image_url: urlData.publicUrl,
           lat: location.lat,
           lng: location.lng,
-          description,
-          status: 'Pending',
+          description: composeDescription(category, description),
+          status: "Pending",
         },
       ]);
-
       if (dbError) throw dbError;
 
-      setStatus('Submitted successfully!');
-      setImageFile(null);
-      setImagePreview(null);
-      setLocation(null);
-      setDescription('');
-      fetchUserIssues();
-    } catch (err: any) {
-      setStatus('Error: ' + err.message);
+      clearReport();
+      setFormTone("ok");
+      setFormMessage("Report sent. The city desk has it.");
+      await loadMine();
+    } catch (error) {
+      setFormTone("error");
+      setFormMessage(error instanceof Error ? error.message : "Could not submit that report.");
     }
+    setSubmitting(false);
   };
 
   const updateIssueStatus = async (id: string, newStatus: string) => {
-    // 1. Instantly update UI 
-    setAllIssues((prevIssues) =>
-      prevIssues.map((issue) =>
-        issue.id === id ? { ...issue, status: newStatus } : issue
-      )
-    );
+    const target = allIssues.find((issue) => issue.id === id) ?? myIssues.find((issue) => issue.id === id);
+    const previous = target?.status;
+    setAllIssues((current) => current.map((issue) => (issue.id === id ? { ...issue, status: newStatus } : issue)));
+    setMyIssues((current) => current.map((issue) => (issue.id === id ? { ...issue, status: newStatus } : issue)));
 
-    // 2. Persist to Supabase DB
-    const { error } = await supabase
-      .from('issues')
-      .update({ status: newStatus })
-      .eq('id', id);
+    if (!supabase || !target || target.user_id === "preview" || target.user_id === "sample") return;
 
+    setSavingId(id);
+    const { error } = await supabase.from("issues").update({ status: newStatus }).eq("id", id);
+    setSavingId(null);
     if (error) {
-      alert(`Database update failed: ${error.message}`);
-      fetchAllIssues(); // Rollback UI if DB update failed
+      setDeskMessage(error.message);
+      if (previous) {
+        const restore = (issue: Issue) => (issue.id === id ? { ...issue, status: previous } : issue);
+        setAllIssues((current) => current.map(restore));
+        setMyIssues((current) => current.map(restore));
+      }
+      return;
     }
+    setDeskMessage("");
   };
 
-  // 1. LANDING PAGE VIEW
-  if (view === 'home') {
+  if (booting) {
     return (
-      <div style={{ maxWidth: '700px', margin: '40px auto', padding: '30px', fontFamily: 'sans-serif', lineHeight: '1.6' }}>
-        <h1 style={{ fontSize: '36px', color: '#0f172a', marginBottom: '10px' }}>CivicIssue Reporter</h1>
-        <p style={{ fontSize: '18px', color: '#475569' }}>
-          Empowering neighborhoods to report infrastructure issues directly to local authorities with precise geotagging and photo evidence.
-        </p>
-
-        <div style={{ display: 'flex', gap: '15px', marginTop: '30px' }}>
-          <button 
-            onClick={() => setView('login')}
-            style={{ padding: '12px 24px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}
-          >
-            Citizen Portal / Login
-          </button>
-          <button 
-            onClick={() => setView('admin-dashboard')}
-            style={{ padding: '12px 24px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}
-          >
-            Admin Portal (Demo)
-          </button>
-        </div>
-
-        <div style={{ marginTop: '50px', borderTop: '1px solid #e2e8f0', paddingTop: '20px' }}>
-          <h3>For City Administrators</h3>
-          <p style={{ color: '#64748b' }}>
-            Looking to integrate this platform with your municipal workflows or municipal database? Reach out to our technical team at{' '}
-            <a href="mailto:example@testemail.com" style={{ color: '#0284c7' }}>example@testemail.com</a>.
-          </p>
-        </div>
+      <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-4 py-6">
+        <SiteHeader />
+        <p className="mt-16 text-lg text-muted">Opening your desk...</p>
       </div>
     );
   }
 
-  // 2. LOGIN / REGISTER VIEW
-  if (view === 'login') {
+  if (view === "home") {
     return (
-      <div style={{ maxWidth: '400px', margin: '60px auto', padding: '30px', fontFamily: 'sans-serif', border: '1px solid #e2e8f0', borderRadius: '10px', background: '#fff' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ margin: 0 }}>{isRegistering ? 'Register' : 'Login'}</h2>
-          <button onClick={() => setView('home')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}>Home</button>
-        </div>
-        
-        <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <input 
-            type="email" 
-            placeholder="Email address" 
-            value={email} 
-            onChange={(e) => setEmail(e.target.value)} 
-            style={{ padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'text' }}
-          />
-          <input 
-            type="password" 
-            placeholder="Password" 
-            value={password} 
-            onChange={(e) => setPassword(e.target.value)} 
-            style={{ padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'text' }}
-          />
-          <button type="submit" style={{ padding: '10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
-            {isRegistering ? 'Create Account' : 'Sign In'}
-          </button>
-        </form>
-
-        <p style={{ marginTop: '20px', textAlign: 'center', fontSize: '14px' }}>
-          {isRegistering ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <button 
-            type="button" 
-            onClick={() => setIsRegistering(!isRegistering)}
-            style={{ background: 'none', border: 'none', color: '#0284c7', cursor: 'pointer', fontWeight: 'bold' }}
-          >
-            {isRegistering ? 'Login' : 'Register'}
-          </button>
-        </p>
-      </div>
+      <LandingView
+        configured={isSupabaseConfigured}
+        onReport={openReport}
+        onDesk={() => {
+          setView("admin-dashboard");
+          if (supabase) void loadAll();
+        }}
+      />
     );
   }
 
-  // 3. ADMIN PORTAL VIEW
-  if (view === 'admin-dashboard') {
-    const predefinedStatuses = ['Pending', 'In Progress', 'Resolved'];
-
+  if (view === "login") {
     return (
-      <div style={{ maxWidth: '800px', margin: '30px auto', padding: '20px', fontFamily: 'sans-serif' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '20px' }}>
-          <h1 style={{ margin: 0, fontSize: '28px', display: 'inline-block' }}>Admin Portal</h1>
-          <button 
-            onClick={() => setView('home')} 
-            style={{ padding: '8px 14px', cursor: 'pointer', backgroundColor: '#334155', color: '#fff', border: 'none', borderRadius: '6px', flexShrink: 0, marginLeft: '10px' }}
-          >
-            Home / Exit
-          </button>
-        </div>
-        <p style={{ color: '#64748b' }}>Live municipal feed. Review reports and update status flags.</p>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px' }}>
-          {allIssues.length === 0 ? (
-            <p style={{ fontStyle: 'italic', color: '#94a3b8' }}>No reports found in database.</p>
-          ) : (
-            allIssues.map((item) => {
-              const isPredefined = predefinedStatuses.includes(item.status);
-              const inCustomMode = isCustomMode[item.id] || (!isPredefined && isCustomMode[item.id] !== false);
-
-              return (
-                <div key={item.id} style={{ display: 'flex', gap: '20px', border: '1px solid #cbd5e1', padding: '15px', borderRadius: '8px', background: '#fff' }}>
-                  <img src={item.image_url} alt="Issue" style={{ width: '120px', height: '120px', objectFit: 'cover', borderRadius: '6px' }} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: '0 0 5px 0', fontSize: '14px', color: '#64748b' }}>📍 {item.lat.toFixed(4)}, {item.lng.toFixed(4)}</p>
-                    <p style={{ margin: '0 0 10px 0', fontWeight: '500' }}>{item.description || 'No description provided.'}</p>
-                    
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 'bold' }}>Status:</span>
-                      
-                      {!inCustomMode ? (
-                        <select 
-                          value={item.status} 
-                          onChange={(e) => {
-                            if (e.target.value === 'CUSTOM_OPTION') {
-                              setIsCustomMode((prev) => ({ ...prev, [item.id]: true }));
-                              setCustomStatusInput((prev) => ({ ...prev, [item.id]: item.status }));
-                            } else {
-                              updateIssueStatus(item.id, e.target.value);
-                            }
-                          }}
-                          style={{ padding: '5px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
-                        >
-                          <option value="Pending">Pending</option>
-                          <option value="In Progress">In Progress</option>
-                          <option value="Resolved">Resolved</option>
-                          {!isPredefined && <option value={item.status}>{item.status}</option>}
-                          <option value="CUSTOM_OPTION">-- Write in custom status... --</option>
-                        </select>
-                      ) : (
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                          <input 
-                            type="text" 
-                            placeholder="Enter custom status..."
-                            value={customStatusInput[item.id] !== undefined ? customStatusInput[item.id] : item.status}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setCustomStatusInput((prev) => ({ ...prev, [item.id]: val }));
-                            }}
-                            style={{ padding: '5px 8px', fontSize: '13px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-                          />
-                          <button 
-                            onClick={() => {
-                              const newStatus = customStatusInput[item.id]?.trim() || item.status;
-                              updateIssueStatus(item.id, newStatus);
-                              setIsCustomMode((prev) => ({ ...prev, [item.id]: false }));
-                            }}
-                            style={{ padding: '5px 10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                          >
-                            Save
-                          </button>
-                          <button 
-                            onClick={() => setIsCustomMode((prev) => ({ ...prev, [item.id]: false }))}
-                            style={{ padding: '5px 8px', background: '#e2e8f0', color: '#334155', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
+      <AuthView
+        configured={isSupabaseConfigured}
+        isRegistering={isRegistering}
+        email={email}
+        password={password}
+        error={authError}
+        notice={authNotice}
+        busy={authBusy}
+        onEmail={(value) => {
+          setEmail(value);
+          setAuthError("");
+        }}
+        onPassword={(value) => {
+          setPassword(value);
+          setAuthError("");
+        }}
+        onSubmit={() => void handleAuth()}
+        onToggle={() => {
+          setIsRegistering((current) => !current);
+          setAuthError("");
+          setAuthNotice("");
+        }}
+        onHome={() => setView("home")}
+        onPreview={() => {
+          setPreview(true);
+          setView("user-dashboard");
+        }}
+      />
     );
   }
 
-  // 4. USER DASHBOARD & TRACKING VIEW
+  if (view === "admin-dashboard") {
+    return (
+      <AdminView
+        issues={allIssues}
+        loading={listLoading}
+        preview={!supabase}
+        message={deskMessage}
+        savingId={savingId}
+        onHome={() => setView("home")}
+        onRefresh={() => void loadAll()}
+        onStatus={(id, status) => void updateIssueStatus(id, status)}
+      />
+    );
+  }
+
   return (
-    <div style={{ maxWidth: '600px', margin: '30px auto', padding: '20px', fontFamily: 'sans-serif' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '20px' }}>
-        <h1 style={{ margin: 0, fontSize: '28px', display: 'inline-block' }}>Report an Issue</h1>
-        <button 
-          onClick={handleLogout} 
-          style={{ padding: '8px 12px', cursor: 'pointer', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '6px', flexShrink: 0, marginLeft: '10px' }}
-        >
-          Logout
-        </button>
-      </div>
-      
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', background: '#fff', padding: '20px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Snap Photo:</label>
-          <input type="file" accept="image/*" capture="environment" onChange={handleCapture} style={{ cursor: 'pointer' }} />
-        </div>
-
-        {imagePreview && (
-          <img src={imagePreview} alt="Preview" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', borderRadius: '6px' }} />
-        )}
-
-        {location && <p style={{ fontSize: '14px', color: '#059669', margin: 0 }}>📍 Coordinates locked: {location.lat.toFixed(4)}, {location.lng.toFixed(4)}</p>}
-
-        <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Description:</label>
-          <input 
-            type="text" 
-            placeholder="e.g., Broken streetlight on 4th Ave" 
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            style={{ width: '100%', padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'text' }}
-          />
-        </div>
-
-        <button 
-          onClick={handleSubmitIssue}
-          style={{ padding: '12px', background: '#0284c7', color: 'white', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}
-        >
-          Submit to City
-        </button>
-
-        <p style={{ fontWeight: 'bold', color: '#0284c7', textAlign: 'center', margin: 0 }}>{status}</p>
-      </div>
-
-      {/* TRACKING SECTION */}
-      <div style={{ marginTop: '30px' }}>
-        <h3>Your Submitted Reports</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
-          {myIssues.length === 0 ? (
-            <p style={{ fontStyle: 'italic', color: '#94a3b8' }}>You haven't submitted any reports yet.</p>
-          ) : (
-            myIssues.map((issue) => (
-              <div key={issue.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '6px', background: '#f8fafc' }}>
-                <div>
-                  <p style={{ margin: '0 0 3px 0', fontWeight: 'bold', fontSize: '14px' }}>{issue.description || 'Civic Report'}</p>
-                  <span style={{ fontSize: '12px', color: '#64748b' }}>Submitted: {new Date(issue.created_at).toLocaleDateString()}</span>
-                </div>
-                <span style={{ 
-                  padding: '4px 10px', 
-                  borderRadius: '4px', 
-                  fontSize: '12px', 
-                  fontWeight: 'bold',
-                  background: issue.status === 'Resolved' ? '#dcfce7' : issue.status === 'In Progress' ? '#e0f2fe' : '#fef9c3',
-                  color: issue.status === 'Resolved' ? '#166534' : issue.status === 'In Progress' ? '#0369a1' : '#854d0e'
-                }}>
-                  {issue.status}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
+    <CitizenView
+      email={signedIn ? email : ""}
+      preview={preview || !signedIn}
+      category={category}
+      description={description}
+      location={location}
+      imageName={imageFile?.name ?? ""}
+      imagePreview={imagePreview}
+      photoInputKey={photoInputKey}
+      issues={myIssues}
+      loading={listLoading && signedIn}
+      submitting={submitting}
+      message={formMessage}
+      messageTone={formTone}
+      onCategory={setCategory}
+      onDescription={setDescription}
+      onCapture={handleCapture}
+      onClearPhoto={() => {
+        setImageFile(null);
+        setImagePreview(null);
+        setPhotoInputKey((key) => key + 1);
+      }}
+      onLocate={locate}
+      onManualLocation={(lat, lng) => {
+        setLocation({ lat, lng });
+        setFormTone("ok");
+        setFormMessage("Location set from the coordinates you entered.");
+      }}
+      onSubmit={() => void handleSubmit()}
+      onLogout={() => void handleLogout()}
+      onHome={() => setView("home")}
+    />
   );
 }
