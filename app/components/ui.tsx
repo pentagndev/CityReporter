@@ -83,8 +83,8 @@ export function IssuePhoto({ src, label }: { src: string; label: string }) {
   const [failed, setFailed] = useState(false);
   if (!src || failed) {
     return (
-      <div className="grid h-full min-h-32 place-items-center rounded-2xl bg-ink px-3 text-center text-sun">
-        <span className="text-sm font-semibold tracking-tight">{label}</span>
+      <div className="grid h-full min-h-28 place-items-center rounded-2xl bg-ink px-1.5 text-center text-sun">
+        <span className="text-[0.68rem] font-semibold uppercase leading-tight tracking-wide">{label}</span>
       </div>
     );
   }

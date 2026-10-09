@@ -369,6 +369,7 @@ export default function Home() {
       <LandingView
         configured={isSupabaseConfigured}
         onReport={openReport}
+        onSignIn={() => setView("login")}
         onDesk={() => {
           setView("admin-dashboard");
           if (supabase) void loadAll();

@@ -274,7 +274,7 @@ export function CitizenView({
             {issues.map((issue) => {
               const copy = splitDescription(issue.description);
               return (
-                <article key={issue.id} className="grid grid-cols-[4.5rem_1fr] gap-3 rounded-2xl border border-line p-3">
+                <article key={issue.id} className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-2xl border border-line p-3">
                   <IssuePhoto src={issue.image_url} label={copy.category} />
                   <div className="min-w-0">
                     <div className="flex items-start justify-between gap-2">

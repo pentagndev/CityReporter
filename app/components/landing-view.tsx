@@ -12,10 +12,12 @@ const steps = [
 export function LandingView({
   configured,
   onReport,
+  onSignIn,
   onDesk,
 }: {
   configured: boolean;
   onReport: () => void;
+  onSignIn: () => void;
   onDesk: () => void;
 }) {
   const sample = SAMPLE_ISSUES[0];
@@ -25,9 +27,14 @@ export function LandingView({
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:py-8">
       <SiteHeader
         action={
-          <button type="button" onClick={onDesk} className="text-sm font-semibold text-muted hover:text-ink">
-            City desk
-          </button>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={onSignIn} className="rounded-full px-3 py-2 text-sm font-semibold text-muted hover:text-ink">
+              Sign in
+            </button>
+            <button type="button" onClick={onDesk} className="rounded-full px-3 py-2 text-sm font-semibold text-muted hover:text-ink">
+              City desk
+            </button>
+          </div>
         }
       />
 
