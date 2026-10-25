@@ -1,45 +1,66 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/utils/supabase';
 
+type View = 'home' | 'login' | 'user-dashboard' | 'admin-login' | 'admin-dashboard';
+type Issue = {
+  id: string;
+  user_id?: string;
+  image_url?: string | null;
+  lat: number;
+  lng: number;
+  description: string | null;
+  status: string;
+  created_at: string;
+};
+
+// Demo-only gate for the Congressional App Challenge recording.
+// This client-side password is not secure enough for a real production admin portal.
 const DEMO_ADMIN_PASSWORD = 'civic-demo-2026';
 
 export default function Home() {
-  const [view, setView] = useState<'home' | 'login' | 'admin-login' | 'user-dashboard' | 'admin-dashboard'>('home');
+  const [view, setView] = useState<View>('home');
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [adminError, setAdminError] = useState('');
-  const [customStatusInput, setCustomStatusInput] = useState<{ [key: string]: string }>({});
-  const [isCustomMode, setIsCustomMode] = useState<{ [key: string]: boolean }>({});
+  const [customStatusInput, setCustomStatusInput] = useState<Record<string, string>>({});
+  const [isCustomMode, setIsCustomMode] = useState<Record<string, boolean>>({});
 
-  // User Dashboard States
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [status, setStatus] = useState('');
   const [description, setDescription] = useState('');
-  
-  // Tracking & Admin Feed Data
-  const [myIssues, setMyIssues] = useState<any[]>([]);
-  const [allIssues, setAllIssues] = useState<any[]>([]);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [myIssues, setMyIssues] = useState<Issue[]>([]);
+  const [allIssues, setAllIssues] = useState<Issue[]>([]);
 
   useEffect(() => {
-    if (view === 'user-dashboard') fetchUserIssues();
-    if (view === 'admin-dashboard') fetchAllIssues();
+    if (view === 'user-dashboard') void fetchUserIssues();
+    if (view === 'admin-dashboard') void fetchAllIssues();
+    // These fetches intentionally run when the selected view changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
   const fetchUserIssues = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) return;
+
     const { data, error } = await supabase
       .from('issues')
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
-    if (!error && data) setMyIssues(data);
+
+    if (error) {
+      setStatus(`Could not load your reports: ${error.message}`);
+      return;
+    }
+    if (data) setMyIssues(data as Issue[]);
   };
 
   const fetchAllIssues = async () => {
@@ -47,33 +68,86 @@ export default function Home() {
       .from('issues')
       .select('*')
       .order('created_at', { ascending: false });
-    if (!error && data) setAllIssues(data);
+
+    if (error) {
+      setStatus(`Could not load reports: ${error.message}`);
+      return;
+    }
+    if (data) setAllIssues(data as Issue[]);
   };
 
-  const handleAuth = async (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!email || !password) {
-      alert('Please fill in all fields');
+    if (!email.trim() || !password) {
+      alert('Please fill in your email and password.');
       return;
     }
 
     if (isRegistering) {
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { error } = await supabase.auth.signUp({ email: email.trim(), password });
       if (error) alert(error.message);
       else {
         alert('Account created! You can now log in.');
         setIsRegistering(false);
       }
     } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) alert(error.message);
-      else setView('user-dashboard');
+      else {
+        setStatus('');
+        setView('user-dashboard');
+      }
     }
   };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setView('home');
+    setImageFile(null);
+    setImagePreview(null);
+    setLocation(null);
+    setDescription('');
+    setStatus('');
+  };
+
+  const requestLocation = () => {
+    setLocation(null);
+    setIsGettingLocation(true);
+    setStatus('Getting location...');
+
+    if (!('geolocation' in navigator)) {
+      setIsGettingLocation(false);
+      setStatus('Location is not supported by this browser. Try the latest version of Chrome.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        setIsGettingLocation(false);
+        setStatus('Location locked. Ready to submit.');
+      },
+      (error) => {
+        setIsGettingLocation(false);
+        if (error.code === error.PERMISSION_DENIED) {
+          setStatus('Location permission denied. Allow location access for this website in your browser settings, then try again.');
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          setStatus('Your location is unavailable. Check your device location settings and try again.');
+        } else if (error.code === error.TIMEOUT) {
+          setStatus('Location timed out after 10 seconds. Try again or check browser location permissions.');
+        } else {
+          setStatus('Could not get your location. Please try again.');
+        }
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 10000,
+        maximumAge: 60000,
+      }
+    );
   };
 
   const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,39 +156,39 @@ export default function Home() {
 
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
-    setStatus('Getting location...');
-
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          setStatus('Location locked. Ready to submit.');
-        },
-        () => setStatus('Failed to get location'),
-        { enableHighAccuracy: true }
-      );
-    }
+    requestLocation();
   };
 
   const handleSubmitIssue = async () => {
-    if (!imageFile || !location) {
-      alert('Please include an image and location.');
+    if (!imageFile) {
+      setStatus('Please select a photo before submitting.');
+      return;
+    }
+    if (!location) {
+      setStatus('Please wait for your location or use Get Location to try again.');
+      return;
+    }
+    if (!description.trim()) {
+      setStatus('Please enter a description of the issue.');
       return;
     }
 
+    setIsSubmitting(true);
     setStatus('Uploading report...');
+
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        setStatus('Please sign in before submitting a report.');
         setView('login');
         return;
       }
 
-      const fileExt = imageFile.name.split('.').pop();
-      const fileName = `${Math.random()}.${fileExt}`;
+      const fileExt = imageFile.name.split('.').pop()?.replace(/[^a-zA-Z0-9]/g, '') || 'jpg';
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage
         .from('issue-images')
-        .upload(fileName, imageFile);
+        .upload(fileName, imageFile, { upsert: false });
 
       if (uploadError) throw uploadError;
 
@@ -122,16 +196,14 @@ export default function Home() {
         .from('issue-images')
         .getPublicUrl(fileName);
 
-      const { error: dbError } = await supabase.from('issues').insert([
-        {
-          user_id: user.id,
-          image_url: urlData.publicUrl,
-          lat: location.lat,
-          lng: location.lng,
-          description,
-          status: 'Pending',
-        },
-      ]);
+      const { error: dbError } = await supabase.from('issues').insert([{
+        user_id: user.id,
+        image_url: urlData.publicUrl,
+        lat: location.lat,
+        lng: location.lng,
+        description: description.trim(),
+        status: 'Pending',
+      }]);
 
       if (dbError) throw dbError;
 
@@ -140,319 +212,227 @@ export default function Home() {
       setImagePreview(null);
       setLocation(null);
       setDescription('');
-      fetchUserIssues();
-    } catch (err: any) {
-      setStatus('Error: ' + err.message);
+      setIsGettingLocation(false);
+      await fetchUserIssues();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      setStatus(`Error: ${message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const updateIssueStatus = async (id: string, newStatus: string) => {
-    // 1. Instantly update UI 
-    setAllIssues((prevIssues) =>
-      prevIssues.map((issue) =>
-        issue.id === id ? { ...issue, status: newStatus } : issue
-      )
-    );
+    const previousIssues = allIssues;
+    setAllIssues((items) => items.map((issue) => issue.id === id ? { ...issue, status: newStatus } : issue));
 
-    // 2. Persist to Supabase DB
     const { error } = await supabase
       .from('issues')
       .update({ status: newStatus })
       .eq('id', id);
 
     if (error) {
+      setAllIssues(previousIssues);
       alert(`Database update failed: ${error.message}`);
-      fetchAllIssues(); // Rollback UI if DB update failed
     }
   };
 
-  // 1. LANDING PAGE VIEW
+  const handleAdminLogin = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (adminPassword === DEMO_ADMIN_PASSWORD) {
+      setAdminError('');
+      setAdminPassword('');
+      setStatus('');
+      setView('admin-dashboard');
+    } else {
+      setAdminError('Incorrect demo password. Please try again.');
+    }
+  };
+
   if (view === 'home') {
     return (
-      <div style={{ maxWidth: '700px', margin: '40px auto', padding: '30px', fontFamily: 'sans-serif', lineHeight: '1.6' }}>
-        <h1 style={{ fontSize: '36px', color: '#0f172a', marginBottom: '10px' }}>CivicIssue Reporter</h1>
-        <p style={{ fontSize: '18px', color: '#475569' }}>
-          Empowering neighborhoods to report infrastructure issues directly to local authorities with precise geotagging and photo evidence.
+      <main style={{ maxWidth: 700, margin: '40px auto', padding: 30, fontFamily: 'sans-serif', lineHeight: 1.6 }}>
+        <h1 style={{ fontSize: 36, color: '#0f172a', marginBottom: 10 }}>CivicIssue Reporter</h1>
+        <p style={{ fontSize: 18, color: '#475569' }}>
+          Empowering neighborhoods to report infrastructure issues directly to local authorities with location details and photo evidence.
         </p>
-
-        <div style={{ display: 'flex', gap: '15px', marginTop: '30px' }}>
-          <button 
-            onClick={() => setView('login')}
-            style={{ padding: '12px 24px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}
-          >
-            Citizen Portal / Login
-          </button>
-          <button 
-            onClick={() => { setAdminPassword(''); setAdminError(''); setView('admin-login'); }}
-            style={{ padding: '12px 24px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}
-          >
-            Admin Portal (Demo)
-          </button>
+        <div style={{ display: 'flex', gap: 15, marginTop: 30, flexWrap: 'wrap' }}>
+          <button onClick={() => setView('login')} style={primaryButton}>Citizen Portal / Login</button>
+          <button onClick={() => { setAdminError(''); setView('admin-login'); }} style={secondaryButton}>Admin Portal (Demo)</button>
         </div>
-
-        <div style={{ marginTop: '50px', borderTop: '1px solid #e2e8f0', paddingTop: '20px' }}>
+        <div style={{ marginTop: 50, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
           <h3>For City Administrators</h3>
           <p style={{ color: '#64748b' }}>
-            Looking to integrate this platform with your municipal workflows or municipal database? Reach out to our technical team at{' '}
-            <a href="mailto:example@testemail.com" style={{ color: '#0284c7' }}>example@testemail.com</a>.
+            Interested in integrating this platform with municipal workflows? This prototype demonstrates a way to organize community reports and track their status.
           </p>
         </div>
-      </div>
+      </main>
     );
   }
 
-  // 2. LOGIN / REGISTER VIEW
   if (view === 'login') {
     return (
-      <div style={{ maxWidth: '400px', margin: '60px auto', padding: '30px', fontFamily: 'sans-serif', border: '1px solid #e2e8f0', borderRadius: '10px', background: '#fff' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+      <main style={{ maxWidth: 400, margin: '60px auto', padding: 30, fontFamily: 'sans-serif', border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h2 style={{ margin: 0 }}>{isRegistering ? 'Register' : 'Login'}</h2>
-          <button onClick={() => setView('home')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}>Home</button>
+          <button onClick={() => setView('home')} style={textButton}>Home</button>
         </div>
-        
-        <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <input 
-            type="email" 
-            placeholder="Email address" 
-            value={email} 
-            onChange={(e) => setEmail(e.target.value)} 
-            style={{ padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'text' }}
-          />
-          <input 
-            type="password" 
-            placeholder="Password" 
-            value={password} 
-            onChange={(e) => setPassword(e.target.value)} 
-            style={{ padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'text' }}
-          />
-          <button type="submit" style={{ padding: '10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
-            {isRegistering ? 'Create Account' : 'Sign In'}
-          </button>
+        <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+          <input type="email" autoComplete="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} required style={inputStyle} />
+          <input type="password" autoComplete={isRegistering ? 'new-password' : 'current-password'} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required style={inputStyle} />
+          <button type="submit" style={primaryButton}>{isRegistering ? 'Create Account' : 'Sign In'}</button>
         </form>
-
-        <p style={{ marginTop: '20px', textAlign: 'center', fontSize: '14px' }}>
+        <p style={{ marginTop: 20, textAlign: 'center', fontSize: 14 }}>
           {isRegistering ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <button 
-            type="button" 
-            onClick={() => setIsRegistering(!isRegistering)}
-            style={{ background: 'none', border: 'none', color: '#0284c7', cursor: 'pointer', fontWeight: 'bold' }}
-          >
+          <button type="button" onClick={() => setIsRegistering(!isRegistering)} style={{ ...textButton, color: '#0284c7' }}>
             {isRegistering ? 'Login' : 'Register'}
           </button>
         </p>
-      </div>
+      </main>
     );
   }
 
-  // 3. DEMO ADMIN PASSWORD VIEW
   if (view === 'admin-login') {
-    const handleAdminLogin = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (adminPassword === DEMO_ADMIN_PASSWORD) {
-        setAdminError('');
-        setAdminPassword('');
-        setView('admin-dashboard');
-      } else {
-        setAdminError('Incorrect demo password. Please try again.');
-      }
-    };
-
     return (
-      <div style={{ maxWidth: '400px', margin: '60px auto', padding: '30px', fontFamily: 'sans-serif', border: '1px solid #e2e8f0', borderRadius: '10px', background: '#fff' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+      <main style={{ maxWidth: 400, margin: '60px auto', padding: 30, fontFamily: 'sans-serif', border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h2 style={{ margin: 0 }}>Admin Demo Login</h2>
-          <button onClick={() => setView('home')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}>Home</button>
+          <button onClick={() => setView('home')} style={textButton}>Home</button>
         </div>
-        <p style={{ color: '#64748b', fontSize: '14px' }}>Enter the demo password to open the administrator dashboard.</p>
-        <form onSubmit={handleAdminLogin} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <input
-            type="password"
-            placeholder="Demo admin password"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
-            autoComplete="off"
-            required
-            style={{ padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
-          />
-          <button type="submit" style={{ padding: '10px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
-            Open Admin Portal
-          </button>
+        <p style={{ color: '#64748b', fontSize: 14 }}>Enter the demo password to open the administrator view.</p>
+        <form onSubmit={handleAdminLogin} style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+          <input type="password" autoComplete="off" placeholder="Demo password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} required style={inputStyle} />
+          {adminError && <p role="alert" style={{ color: '#b91c1c', margin: 0 }}>{adminError}</p>}
+          <button type="submit" style={primaryButton}>Open Admin Portal</button>
         </form>
-        {adminError && <p role="alert" style={{ marginTop: '15px', color: '#dc2626', fontSize: '14px' }}>{adminError}</p>}
-        <p style={{ marginTop: '20px', color: '#94a3b8', fontSize: '12px' }}>Demo-only password gate. This is not real authentication.</p>
-      </div>
+        <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 18 }}>Demo access only. This client-side gate is not production security.</p>
+      </main>
     );
   }
 
-  // 4. ADMIN PORTAL VIEW
   if (view === 'admin-dashboard') {
     const predefinedStatuses = ['Pending', 'In Progress', 'Resolved'];
-
     return (
-      <div style={{ maxWidth: '800px', margin: '30px auto', padding: '20px', fontFamily: 'sans-serif' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '20px' }}>
-          <h1 style={{ margin: 0, fontSize: '28px', display: 'inline-block' }}>Admin Portal</h1>
-          <button 
-            onClick={() => setView('home')} 
-            style={{ padding: '8px 14px', cursor: 'pointer', backgroundColor: '#334155', color: '#fff', border: 'none', borderRadius: '6px', flexShrink: 0, marginLeft: '10px' }}
-          >
-            Home / Exit
-          </button>
+      <main style={{ maxWidth: 800, margin: '30px auto', padding: 20, fontFamily: 'sans-serif' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <h1 style={{ margin: 0, fontSize: 28 }}>Admin Portal</h1>
+          <button onClick={() => { setView('home'); setStatus(''); }} style={secondaryButton}>Home / Exit</button>
         </div>
-        <p style={{ color: '#64748b' }}>Live municipal feed. Review reports and update status flags.</p>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px' }}>
+        <p style={{ color: '#64748b' }}>Review submitted reports and update their statuses.</p>
+        {status && <p role="status" style={{ color: '#b45309' }}>{status}</p>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, marginTop: 20 }}>
           {allIssues.length === 0 ? (
             <p style={{ fontStyle: 'italic', color: '#94a3b8' }}>No reports found in database.</p>
-          ) : (
-            allIssues.map((item) => {
-              const isPredefined = predefinedStatuses.includes(item.status);
-              const inCustomMode = isCustomMode[item.id] || (!isPredefined && isCustomMode[item.id] !== false);
-
-              return (
-                <div key={item.id} style={{ display: 'flex', gap: '20px', border: '1px solid #cbd5e1', padding: '15px', borderRadius: '8px', background: '#fff' }}>
-                  <img src={item.image_url} alt="Issue" style={{ width: '120px', height: '120px', objectFit: 'cover', borderRadius: '6px' }} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: '0 0 5px 0', fontSize: '14px', color: '#64748b' }}>📍 {item.lat.toFixed(4)}, {item.lng.toFixed(4)}</p>
-                    <p style={{ margin: '0 0 10px 0', fontWeight: '500' }}>{item.description || 'No description provided.'}</p>
-                    
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 'bold' }}>Status:</span>
-                      
-                      {!inCustomMode ? (
-                        <select 
-                          value={item.status} 
-                          onChange={(e) => {
-                            if (e.target.value === 'CUSTOM_OPTION') {
-                              setIsCustomMode((prev) => ({ ...prev, [item.id]: true }));
-                              setCustomStatusInput((prev) => ({ ...prev, [item.id]: item.status }));
-                            } else {
-                              updateIssueStatus(item.id, e.target.value);
-                            }
-                          }}
-                          style={{ padding: '5px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
-                        >
-                          <option value="Pending">Pending</option>
-                          <option value="In Progress">In Progress</option>
-                          <option value="Resolved">Resolved</option>
-                          {!isPredefined && <option value={item.status}>{item.status}</option>}
-                          <option value="CUSTOM_OPTION">-- Write in custom status... --</option>
-                        </select>
-                      ) : (
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                          <input 
-                            type="text" 
-                            placeholder="Enter custom status..."
-                            value={customStatusInput[item.id] !== undefined ? customStatusInput[item.id] : item.status}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setCustomStatusInput((prev) => ({ ...prev, [item.id]: val }));
-                            }}
-                            style={{ padding: '5px 8px', fontSize: '13px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-                          />
-                          <button 
-                            onClick={() => {
-                              const newStatus = customStatusInput[item.id]?.trim() || item.status;
-                              updateIssueStatus(item.id, newStatus);
-                              setIsCustomMode((prev) => ({ ...prev, [item.id]: false }));
-                            }}
-                            style={{ padding: '5px 10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                          >
-                            Save
-                          </button>
-                          <button 
-                            onClick={() => setIsCustomMode((prev) => ({ ...prev, [item.id]: false }))}
-                            style={{ padding: '5px 8px', background: '#e2e8f0', color: '#334155', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                    </div>
+          ) : allIssues.map((item) => {
+            const isPredefined = predefinedStatuses.includes(item.status);
+            const inCustomMode = isCustomMode[item.id] ?? !isPredefined;
+            return (
+              <article key={item.id} style={{ display: 'flex', gap: 20, border: '1px solid #cbd5e1', padding: 15, borderRadius: 8, background: '#fff', flexWrap: 'wrap' }}>
+                {item.image_url ? <img src={item.image_url} alt="Reported issue" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 6 }} /> : <div style={{ width: 120, height: 120, display: 'grid', placeItems: 'center', background: '#f1f5f9', color: '#64748b', borderRadius: 6, fontSize: 13 }}>No image</div>}
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <p style={{ margin: '0 0 5px', fontSize: 14, color: '#64748b' }}>📍 {Number(item.lat).toFixed(4)}, {Number(item.lng).toFixed(4)}</p>
+                  <p style={{ margin: '0 0 10px', fontWeight: 500 }}>{item.description || 'No description provided.'}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 'bold' }}>Status:</span>
+                    {!inCustomMode ? (
+                      <select value={item.status} onChange={(e) => {
+                        if (e.target.value === 'CUSTOM_OPTION') {
+                          setIsCustomMode((prev) => ({ ...prev, [item.id]: true }));
+                          setCustomStatusInput((prev) => ({ ...prev, [item.id]: item.status }));
+                        } else void updateIssueStatus(item.id, e.target.value);
+                      }} style={inputStyle}>
+                        <option value="Pending">Pending</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Resolved">Resolved</option>
+                        {!isPredefined && <option value={item.status}>{item.status}</option>}
+                        <option value="CUSTOM_OPTION">-- Write in custom status... --</option>
+                      </select>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input type="text" placeholder="Enter custom status..." value={customStatusInput[item.id] ?? item.status} onChange={(e) => setCustomStatusInput((prev) => ({ ...prev, [item.id]: e.target.value }))} style={{ ...inputStyle, width: 190 }} />
+                        <button onClick={() => {
+                          const nextStatus = customStatusInput[item.id]?.trim() || item.status;
+                          void updateIssueStatus(item.id, nextStatus);
+                          setIsCustomMode((prev) => ({ ...prev, [item.id]: false }));
+                        }} style={primaryButton}>Save</button>
+                        <button onClick={() => setIsCustomMode((prev) => ({ ...prev, [item.id]: false }))} style={secondaryButton}>Cancel</button>
+                      </div>
+                    )}
                   </div>
                 </div>
-              );
-            })
-          )}
+              </article>
+            );
+          })}
         </div>
-      </div>
+      </main>
     );
   }
 
-  // 5. USER DASHBOARD & TRACKING VIEW
   return (
-    <div style={{ maxWidth: '600px', margin: '30px auto', padding: '20px', fontFamily: 'sans-serif' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '20px' }}>
-        <h1 style={{ margin: 0, fontSize: '28px', display: 'inline-block' }}>Report an Issue</h1>
-        <button 
-          onClick={handleLogout} 
-          style={{ padding: '8px 12px', cursor: 'pointer', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '6px', flexShrink: 0, marginLeft: '10px' }}
-        >
-          Logout
-        </button>
+    <main style={{ maxWidth: 600, margin: '30px auto', padding: 20, fontFamily: 'sans-serif' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+        <h1 style={{ margin: 0, fontSize: 28 }}>Report an Issue</h1>
+        <button onClick={() => void handleLogout()} style={dangerButton}>Logout</button>
       </div>
-      
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', background: '#fff', padding: '20px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 15, background: '#fff', padding: 20, border: '1px solid #e2e8f0', borderRadius: 8 }}>
         <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Snap Photo:</label>
-          <input type="file" accept="image/*" capture="environment" onChange={handleCapture} style={{ cursor: 'pointer' }} />
+          <label htmlFor="issue-photo" style={{ display: 'block', marginBottom: 5, fontWeight: 'bold' }}>Snap Photo:</label>
+          <input id="issue-photo" type="file" accept="image/*" capture="environment" onChange={handleCapture} style={{ cursor: 'pointer' }} />
         </div>
-
-        {imagePreview && (
-          <img src={imagePreview} alt="Preview" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', borderRadius: '6px' }} />
-        )}
-
-        {location && <p style={{ fontSize: '14px', color: '#059669', margin: 0 }}>📍 Coordinates locked: {location.lat.toFixed(4)}, {location.lng.toFixed(4)}</p>}
-
+        {imagePreview && <img src={imagePreview} alt="Selected report preview" style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 6 }} />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button type="button" onClick={requestLocation} disabled={isGettingLocation} style={secondaryButton}>
+            {isGettingLocation ? 'Getting Location...' : location ? 'Refresh Location' : 'Get Location'}
+          </button>
+          {location && <span style={{ fontSize: 13, color: '#059669' }}>📍 {location.lat.toFixed(4)}, {location.lng.toFixed(4)}</span>}
+        </div>
         <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Description:</label>
-          <input 
-            type="text" 
-            placeholder="e.g., Broken streetlight on 4th Ave" 
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            style={{ width: '100%', padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'text' }}
-          />
+          <label htmlFor="issue-description" style={{ display: 'block', marginBottom: 5, fontWeight: 'bold' }}>Description:</label>
+          <input id="issue-description" type="text" placeholder="e.g., Broken streetlight on 4th Ave" value={description} onChange={(e) => setDescription(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
         </div>
-
-        <button 
-          onClick={handleSubmitIssue}
-          style={{ padding: '12px', background: '#0284c7', color: 'white', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}
-        >
-          Submit to City
+        <button onClick={() => void handleSubmitIssue()} disabled={isSubmitting || isGettingLocation} style={{ ...primaryButton, opacity: isSubmitting || isGettingLocation ? 0.65 : 1 }}>
+          {isSubmitting ? 'Submitting...' : 'Submit to City'}
         </button>
+        {status && <p role="status" style={{ fontWeight: 'bold', color: status.startsWith('Error:') || status.toLowerCase().includes('denied') || status.toLowerCase().includes('timed out') ? '#b91c1c' : '#0284c7', textAlign: 'center', margin: 0 }}>{status}</p>}
+      </section>
 
-        <p style={{ fontWeight: 'bold', color: '#0284c7', textAlign: 'center', margin: 0 }}>{status}</p>
-      </div>
-
-      {/* TRACKING SECTION */}
-      <div style={{ marginTop: '30px' }}>
+      <section style={{ marginTop: 30 }}>
         <h3>Your Submitted Reports</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
           {myIssues.length === 0 ? (
             <p style={{ fontStyle: 'italic', color: '#94a3b8' }}>You haven't submitted any reports yet.</p>
-          ) : (
-            myIssues.map((issue) => (
-              <div key={issue.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '6px', background: '#f8fafc' }}>
-                <div>
-                  <p style={{ margin: '0 0 3px 0', fontWeight: 'bold', fontSize: '14px' }}>{issue.description || 'Civic Report'}</p>
-                  <span style={{ fontSize: '12px', color: '#64748b' }}>Submitted: {new Date(issue.created_at).toLocaleDateString()}</span>
-                </div>
-                <span style={{ 
-                  padding: '4px 10px', 
-                  borderRadius: '4px', 
-                  fontSize: '12px', 
-                  fontWeight: 'bold',
-                  background: issue.status === 'Resolved' ? '#dcfce7' : issue.status === 'In Progress' ? '#e0f2fe' : '#fef9c3',
-                  color: issue.status === 'Resolved' ? '#166534' : issue.status === 'In Progress' ? '#0369a1' : '#854d0e'
-                }}>
-                  {issue.status}
-                </span>
+          ) : myIssues.map((issue) => (
+            <article key={issue.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: 12, border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc' }}>
+              <div>
+                <p style={{ margin: '0 0 3px', fontWeight: 'bold', fontSize: 14 }}>{issue.description || 'Civic Report'}</p>
+                <span style={{ fontSize: 12, color: '#64748b' }}>Submitted: {new Date(issue.created_at).toLocaleDateString()}</span>
               </div>
-            ))
-          )}
+              <span style={{ padding: '4px 10px', borderRadius: 4, fontSize: 12, fontWeight: 'bold', background: issue.status === 'Resolved' ? '#dcfce7' : issue.status === 'In Progress' ? '#e0f2fe' : '#fef9c3', color: issue.status === 'Resolved' ? '#166534' : issue.status === 'In Progress' ? '#0369a1' : '#854d0e' }}>{issue.status}</span>
+            </article>
+          ))}
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }
+
+const primaryButton: React.CSSProperties = {
+  padding: '12px 18px', background: '#0284c7', color: '#fff', border: 'none',
+  borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: 15,
+};
+const secondaryButton: React.CSSProperties = {
+  padding: '9px 14px', background: '#334155', color: '#fff', border: 'none',
+  borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: 14,
+};
+const dangerButton: React.CSSProperties = {
+  padding: '8px 12px', background: '#ef4444', color: '#fff', border: 'none',
+  borderRadius: 6, fontWeight: 'bold', cursor: 'pointer',
+};
+const textButton: React.CSSProperties = {
+  background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
+  textDecoration: 'underline', fontSize: 14,
+};
+const inputStyle: React.CSSProperties = {
+  padding: '9px 10px', fontSize: 14, borderRadius: 6,
+  border: '1px solid #cbd5e1', boxSizing: 'border-box',
+};
