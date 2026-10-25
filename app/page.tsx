@@ -1,13 +1,17 @@
-'use client';
+\'use client';
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/utils/supabase';
 
+const DEMO_ADMIN_PASSWORD = 'civic-demo-2026';
+
 export default function Home() {
-  const [view, setView] = useState<'home' | 'login' | 'user-dashboard' | 'admin-dashboard'>('home');
+  const [view, setView] = useState<'home' | 'login' | 'admin-login' | 'user-dashboard' | 'admin-dashboard'>('home');
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminError, setAdminError] = useState('');
   const [customStatusInput, setCustomStatusInput] = useState<{ [key: string]: string }>({});
   const [isCustomMode, setIsCustomMode] = useState<{ [key: string]: boolean }>({});
 
@@ -179,7 +183,7 @@ export default function Home() {
             Citizen Portal / Login
           </button>
           <button 
-            onClick={() => setView('admin-dashboard')}
+            onClick={() => { setAdminPassword(''); setAdminError(''); setView('admin-login'); }}
             style={{ padding: '12px 24px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}
           >
             Admin Portal (Demo)
@@ -240,7 +244,47 @@ export default function Home() {
     );
   }
 
-  // 3. ADMIN PORTAL VIEW
+  // 3. DEMO ADMIN PASSWORD VIEW
+  if (view === 'admin-login') {
+    const handleAdminLogin = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (adminPassword === DEMO_ADMIN_PASSWORD) {
+        setAdminError('');
+        setAdminPassword('');
+        setView('admin-dashboard');
+      } else {
+        setAdminError('Incorrect demo password. Please try again.');
+      }
+    };
+
+    return (
+      <div style={{ maxWidth: '400px', margin: '60px auto', padding: '30px', fontFamily: 'sans-serif', border: '1px solid #e2e8f0', borderRadius: '10px', background: '#fff' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h2 style={{ margin: 0 }}>Admin Demo Login</h2>
+          <button onClick={() => setView('home')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}>Home</button>
+        </div>
+        <p style={{ color: '#64748b', fontSize: '14px' }}>Enter the demo password to open the administrator dashboard.</p>
+        <form onSubmit={handleAdminLogin} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          <input
+            type="password"
+            placeholder="Demo admin password"
+            value={adminPassword}
+            onChange={(e) => setAdminPassword(e.target.value)}
+            autoComplete="off"
+            required
+            style={{ padding: '10px', fontSize: '15px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+          />
+          <button type="submit" style={{ padding: '10px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
+            Open Admin Portal
+          </button>
+        </form>
+        {adminError && <p role="alert" style={{ marginTop: '15px', color: '#dc2626', fontSize: '14px' }}>{adminError}</p>}
+        <p style={{ marginTop: '20px', color: '#94a3b8', fontSize: '12px' }}>Demo-only password gate. This is not real authentication.</p>
+      </div>
+    );
+  }
+
+  // 4. ADMIN PORTAL VIEW
   if (view === 'admin-dashboard') {
     const predefinedStatuses = ['Pending', 'In Progress', 'Resolved'];
 
@@ -335,7 +379,7 @@ export default function Home() {
     );
   }
 
-  // 4. USER DASHBOARD & TRACKING VIEW
+  // 5. USER DASHBOARD & TRACKING VIEW
   return (
     <div style={{ maxWidth: '600px', margin: '30px auto', padding: '20px', fontFamily: 'sans-serif' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '20px' }}>
